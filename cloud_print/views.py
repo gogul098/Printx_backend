@@ -1,0 +1,117 @@
+import hmac
+import hashlib
+import json
+import razorpay
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
+from .tasks import trigger_telegram_delivery_task
+from .models import PrintOrder
+
+@csrf_exempt
+def create_order(request):
+    if request.method != "POST":
+        return HttpResponseBadRequest("Invalid Request Method")
+    
+    try:
+        data = json.loads(request.body)
+        
+        claimed_pages = int(data.get('claimed_pages', 1))
+        copies = int(data.get('copies', 1))
+        color_mode = data.get('color_mode', 'bw')
+        sides = data.get('sides', 'single')
+        binding = data.get('binding', 'none')
+        
+        # Exact price calculation rules:
+        if color_mode == 'color' and sides == 'single':
+            per_page_price = 10.0
+        elif color_mode == 'color' and sides == 'double':
+            per_page_price = 7.5
+        elif color_mode == 'bw' and sides == 'single':
+            per_page_price = 3.0
+        elif color_mode == 'bw' and sides == 'double':
+            per_page_price = 2.0
+        else:
+            per_page_price = 3.0
+            
+        printing_cost = claimed_pages * copies * per_page_price
+        
+        if binding.lower() == 'soft binding':
+            binding_cost = 60.0
+        elif binding.lower() == 'spiral binding':
+            binding_cost = 80.0
+        else:
+            binding_cost = 0.0
+            
+        total_price = printing_cost + binding_cost
+        
+        # Generate Razorpay Order
+        razorpay_client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+        razorpay_order = razorpay_client.order.create(dict(
+            amount=int(total_price * 100),
+            currency='INR',
+            payment_capture='1'
+        ))
+        
+        # Save to DB
+        PrintOrder.objects.create(
+            razorpay_order_id=razorpay_order['id'],
+            status="Created",
+            firebase_file_path=data.get('storage_path', ''),
+            file_name=data.get('file_name', 'document.pdf'),
+            claimed_pages=claimed_pages,
+            price_calculated=total_price,
+            color_mode=color_mode,
+            copies=copies,
+            binding_type=binding
+        )
+        
+        return JsonResponse({
+            'order_id': razorpay_order['id'],
+            'amount': total_price,
+            'currency': 'INR'
+        })
+    except Exception as e:
+        return HttpResponseBadRequest(f"Error creating order: {str(e)}")
+
+@csrf_exempt
+def razorpay_webhook(request):
+    if request.method != "POST":
+        return HttpResponseBadRequest("Invalid Request Method")
+        
+    # 1. Get the signature sent by Razorpay
+    webhook_signature = request.headers.get('X-Razorpay-Signature')
+    webhook_secret = settings.RAZORPAY_WEBHOOK_SECRET
+    
+    if not webhook_signature:
+        return HttpResponseBadRequest("Missing Signature")
+    
+    # 2. Recompute the hash using your secret and the raw request body
+    raw_body = request.body
+    expected_signature = hmac.new(
+        webhook_secret.encode('utf-8'),
+        raw_body,
+        hashlib.sha256
+    ).hexdigest()
+    
+    # 3. Check for equivalence
+    if not hmac.compare_digest(expected_signature, webhook_signature):
+        return HttpResponseBadRequest("Invalid Signature")
+        
+    # 4. Parse payload securely
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Invalid JSON Payload")
+        
+    event = payload.get('event')
+    
+    if event == "payment.captured":
+        try:
+            order_id = payload['payload']['payment']['entity']['order_id']
+            # The payment is officially verified! Hand off immediately.
+            trigger_telegram_delivery_task.delay(order_id) 
+        except KeyError:
+            return HttpResponseBadRequest("Invalid Event Payload Structure")
+            
+    return HttpResponse(status=200)
