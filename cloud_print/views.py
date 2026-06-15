@@ -6,7 +6,6 @@ from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from .tasks import trigger_telegram_delivery_task
-from .models import PrintOrder
 
 @csrf_exempt
 def create_order(request):
@@ -53,19 +52,10 @@ def create_order(request):
             payment_capture='1'
         ))
         
-        # Save to DB
-        PrintOrder.objects.create(
-            razorpay_order_id=razorpay_order['id'],
-            status="Created",
-            firebase_file_path=data.get('storage_path', ''),
-            file_name=data.get('file_name', 'document.pdf'),
-            claimed_pages=claimed_pages,
-            price_calculated=total_price,
-            color_mode=color_mode,
-            copies=copies,
-            binding_type=binding
-        )
+        # We no longer save to the local SQL database here.
+        # The frontend will save the order details directly to Firebase.
         
+
         return JsonResponse({
             'order_id': razorpay_order['id'],
             'amount': total_price,

@@ -1,13 +1,13 @@
 import requests
 from celery import shared_task
 import firebase_admin
-from firebase_admin import credentials, storage
+from firebase_admin import credentials, firestore
 from django.conf import settings
-from .models import PrintOrder
 import io
 import PyPDF2
 import os
 import json
+import boto3
 
 @shared_task(name="trigger_telegram_delivery_task")
 def trigger_telegram_delivery_task(order_id):
@@ -22,35 +22,65 @@ def trigger_telegram_delivery_task(order_id):
         else:
             # Fallback to default/local setup if needed
             firebase_admin.initialize_app()
+            
+    db = firestore.client()
         
-    # 1. Look up order configuration from DB
-    order = PrintOrder.objects.get(razorpay_order_id=order_id)
-    order.status = "Paid"
-    order.save()
+    # 1. Look up order configuration from Firestore
+    order_ref = db.collection('orders').document(order_id)
+    order_doc = order_ref.get()
     
-    # 2. Connect to Firebase Storage bucket
-    # Replace 'your-bucket-name' with your actual bucket name or configure it in settings
-    bucket = storage.bucket('your-bucket-name.appspot.com')
-    blob = bucket.blob(order.firebase_file_path)
+    if not order_doc.exists:
+        print(f"Order {order_id} not found in Firestore.")
+        return
+        
+    order_data = order_doc.to_dict()
     
-    # 3. Stream the file directly into memory or a temporary file
-    file_data = blob.download_as_bytes()
+    # Update status to Paid in Firestore
+    order_ref.update({"status": "Paid"})
+    
+    # Extract order details
+    storage_path = order_data.get('storage_path', '')
+    file_name = order_data.get('file_name', 'document.pdf')
+    claimed_pages = int(order_data.get('claimed_pages', 1))
+    color_mode = order_data.get('color_mode', 'bw')
+    copies = int(order_data.get('copies', 1))
+    binding_type = order_data.get('binding_type', 'none')
+    price_calculated = order_data.get('price_calculated', 0.0)
+    
+    # 2. Connect to Backblaze B2 via boto3
+    b2_endpoint_url = os.environ.get("B2_ENDPOINT_URL")
+    b2_key_id = os.environ.get("B2_KEY_ID")
+    b2_application_key = os.environ.get("B2_APPLICATION_KEY")
+    b2_bucket_name = os.environ.get("B2_BUCKET_NAME")
+    
+    s3 = boto3.client('s3',
+                      endpoint_url=b2_endpoint_url,
+                      aws_access_key_id=b2_key_id,
+                      aws_secret_access_key=b2_application_key)
+    
+    # 3. Stream the file directly into memory
+    file_obj = io.BytesIO()
+    try:
+        s3.download_fileobj(b2_bucket_name, storage_path, file_obj)
+        file_data = file_obj.getvalue()
+    except Exception as e:
+        print(f"Error downloading file from Backblaze B2: {str(e)}")
+        return
     
     # 4. Verify Actual Pages (Trust but Verify)
-    actual_pages = order.claimed_pages # default to claimed if parsing fails
+    actual_pages = claimed_pages # default to claimed if parsing fails
     try:
         pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_data))
         actual_pages = len(pdf_reader.pages)
-        order.actual_pages = actual_pages
-        order.save()
+        order_ref.update({"actual_pages": actual_pages})
     except Exception as e:
-        print(f"Error parsing PDF for order {order.id}: {str(e)}")
+        print(f"Error parsing PDF for order {order_id}: {str(e)}")
         
     fraud_alert = ""
-    if actual_pages > order.claimed_pages:
+    if actual_pages > claimed_pages:
         fraud_alert = (
             "🚨 FRAUD ALERT - DO NOT PRINT 🚨\n"
-            f"User paid for: {order.claimed_pages} pages\n"
+            f"User paid for: {claimed_pages} pages\n"
             f"Actual file contains: {actual_pages} pages\n"
             "Action required: Collect remaining balance before printing.\n\n"
         )
@@ -59,13 +89,13 @@ def trigger_telegram_delivery_task(order_id):
     caption_text = (
         f"{fraud_alert}"
         f"🖨️ **New Print Order!**\n"
-        f"🆔 Order ID: {order.id}\n"
-        f"📄 Claimed Pages: {order.claimed_pages}\n"
+        f"🆔 Order ID: {order_id}\n"
+        f"📄 Claimed Pages: {claimed_pages}\n"
         f"📄 Actual Pages: {actual_pages}\n"
-        f"🎨 Mode: {order.color_mode}\n"
-        f"📚 Copies: {order.copies}\n"
-        f"📎 Binding: {order.binding_type}\n"
-        f"💵 Amount Paid: ₹{order.price_calculated}"
+        f"🎨 Mode: {color_mode}\n"
+        f"📚 Copies: {copies}\n"
+        f"📎 Binding: {binding_type}\n"
+        f"💵 Amount Paid: ₹{price_calculated}"
     )
     
     # 6. Push to Telegram Bot API
@@ -73,11 +103,10 @@ def trigger_telegram_delivery_task(order_id):
     chat_id = settings.SHOP_TELEGRAM_CHAT_ID
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     
-    files = {'document': (order.file_name, file_data)}
+    files = {'document': (file_name, file_data)}
     data = {'chat_id': chat_id, 'caption': caption_text, 'parse_mode': 'Markdown'}
     
     response = requests.post(url, files=files, data=data)
     
     if response.status_code == 200:
-        order.status = "Sent to Printer"
-        order.save()
+        order_ref.update({"status": "Sent to Printer"})
