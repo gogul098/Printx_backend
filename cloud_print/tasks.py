@@ -78,6 +78,15 @@ def trigger_telegram_delivery_task(order_id):
     
     # 3. Stream the file directly into memory
     print(f"[{order_id}] Step 3: Downloading file from Backblaze path '{storage_path}'...")
+    
+    if not b2_bucket_name:
+        print(f"[{order_id}] ERROR: B2_BUCKET_NAME is missing in environment variables!")
+        return
+        
+    if not storage_path:
+        print(f"[{order_id}] ERROR: storage_path in Firestore is empty or null! The frontend might not be saving it correctly.")
+        return
+
     file_obj = io.BytesIO()
     try:
         s3.download_fileobj(b2_bucket_name, storage_path, file_obj)
@@ -110,7 +119,7 @@ def trigger_telegram_delivery_task(order_id):
     # 5. Compile the print instruction caption for the shop owner
     caption_text = (
         f"{fraud_alert}"
-        f"🖨️ **New Print Order!**\n"
+        f"🖨️ <b>New Print Order!</b>\n"
         f"🆔 Order ID: {order_id}\n"
         f"📄 Claimed Pages: {claimed_pages}\n"
         f"📄 Actual Pages: {actual_pages}\n"
@@ -126,7 +135,7 @@ def trigger_telegram_delivery_task(order_id):
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     
     files = {'document': (file_name, file_data)}
-    data = {'chat_id': chat_id, 'caption': caption_text, 'parse_mode': 'Markdown'}
+    data = {'chat_id': chat_id, 'caption': caption_text, 'parse_mode': 'HTML'}
     
     try:
         response = requests.post(url, files=files, data=data)
