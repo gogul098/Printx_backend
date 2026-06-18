@@ -30,13 +30,23 @@ def trigger_telegram_delivery_task(order_id):
             
     db = firestore.client()
         
+    import time
+    
     # 1. Look up order configuration from Firestore
     print(f"[{order_id}] Step 1: Looking up order in Firestore...")
     order_ref = db.collection('orders').document(order_id)
-    order_doc = order_ref.get()
     
-    if not order_doc.exists:
-        print(f"[{order_id}] ERROR: Order not found in Firestore!")
+    order_doc = None
+    for attempt in range(5):
+        doc = order_ref.get()
+        if doc.exists:
+            order_doc = doc
+            break
+        print(f"[{order_id}] Order not found yet. Waiting 2 seconds to allow Android app to save it... (Attempt {attempt+1}/5)")
+        time.sleep(2)
+    
+    if not order_doc:
+        print(f"[{order_id}] ERROR: Order not found in Firestore after 10 seconds!")
         return
         
     print(f"[{order_id}] Order found in Firestore. Updating status to 'Paid'.")
