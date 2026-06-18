@@ -105,10 +105,10 @@ def razorpay_webhook(request):
     if event == "payment.captured":
         try:
             order_id = payload['payload']['payment']['entity']['order_id']
-            print(f"Payment Captured successfully for Order: {order_id}. Queuing Celery Task...")
-            # The payment is officially verified! Hand off immediately.
-            trigger_telegram_delivery_task.delay(order_id) 
-            print(f"Celery Task queued successfully for Order: {order_id}")
+            print(f"Payment Captured successfully for Order: {order_id}. Running Task Synchronously...")
+            # Run directly to avoid Celery background worker memory limits on Render Free Tier
+            trigger_telegram_delivery_task(order_id) 
+            print(f"Task finished successfully for Order: {order_id}")
         except KeyError:
             print("Webhook Error: Invalid Event Payload Structure (missing order_id)")
             return HttpResponseBadRequest("Invalid Event Payload Structure")
