@@ -17,6 +17,8 @@ services:
     buildCommand: "bash build.sh"
     startCommand: "bash start.sh"
     envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: DATABASE_URL
         fromDatabase:
           name: printapp-db

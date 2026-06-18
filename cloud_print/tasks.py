@@ -106,7 +106,14 @@ def trigger_telegram_delivery_task(order_id):
     files = {'document': (file_name, file_data)}
     data = {'chat_id': chat_id, 'caption': caption_text, 'parse_mode': 'Markdown'}
     
-    response = requests.post(url, files=files, data=data)
-    
-    if response.status_code == 200:
-        order_ref.update({"status": "Sent to Printer"})
+    try:
+        response = requests.post(url, files=files, data=data)
+        
+        if response.status_code == 200:
+            order_ref.update({"status": "Sent to Printer"})
+            print(f"Successfully sent order {order_id} to Telegram.")
+        else:
+            print(f"Failed to send order {order_id} to Telegram. Status: {response.status_code}, Error: {response.text}")
+    except Exception as e:
+        print(f"Exception while sending to Telegram for order {order_id}: {str(e)}")
+
