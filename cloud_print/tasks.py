@@ -18,6 +18,10 @@ def trigger_telegram_delivery_task(order_id):
         firebase_json_str = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
         if firebase_json_str:
             cred_dict = json.loads(firebase_json_str)
+            # Render and some shells double-escape newlines in environment variables.
+            # We must fix the \n in the private_key before passing it to Firebase.
+            if "private_key" in cred_dict:
+                cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
         else:
