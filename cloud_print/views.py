@@ -66,7 +66,9 @@ def create_order(request):
 
 @csrf_exempt
 def razorpay_webhook(request):
+    print("====== RAZORPAY WEBHOOK RECEIVED ======")
     if request.method != "POST":
+        print("Webhook Error: Invalid Request Method")
         return HttpResponseBadRequest("Invalid Request Method")
         
     # 1. Get the signature sent by Razorpay
@@ -74,6 +76,7 @@ def razorpay_webhook(request):
     webhook_secret = settings.RAZORPAY_WEBHOOK_SECRET
     
     if not webhook_signature:
+        print("Webhook Error: Missing Signature in headers")
         return HttpResponseBadRequest("Missing Signature")
     
     # 2. Recompute the hash using your secret and the raw request body
@@ -86,22 +89,28 @@ def razorpay_webhook(request):
     
     # 3. Check for equivalence
     if not hmac.compare_digest(expected_signature, webhook_signature):
+        print("Webhook Error: Invalid Signature (secrets do not match)")
         return HttpResponseBadRequest("Invalid Signature")
         
     # 4. Parse payload securely
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
+        print("Webhook Error: Invalid JSON Payload")
         return HttpResponseBadRequest("Invalid JSON Payload")
         
     event = payload.get('event')
+    print(f"Webhook Success: Valid signature! Event type: {event}")
     
     if event == "payment.captured":
         try:
             order_id = payload['payload']['payment']['entity']['order_id']
+            print(f"Payment Captured successfully for Order: {order_id}. Queuing Celery Task...")
             # The payment is officially verified! Hand off immediately.
             trigger_telegram_delivery_task.delay(order_id) 
+            print(f"Celery Task queued successfully for Order: {order_id}")
         except KeyError:
+            print("Webhook Error: Invalid Event Payload Structure (missing order_id)")
             return HttpResponseBadRequest("Invalid Event Payload Structure")
             
     return HttpResponse(status=200)
