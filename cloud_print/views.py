@@ -9,10 +9,10 @@ from .tasks import trigger_telegram_delivery_task
 
 @csrf_exempt
 def create_order(request):
-    if request.method != "POST":
-        return HttpResponseBadRequest("Invalid Request Method")
-    
     try:
+        # 1. Print the raw data exactly as Android sent it
+        print("📥 INCOMING DATA FROM ANDROID:", request.body.decode('utf-8'))
+        
         data = json.loads(request.body)
         
         claimed_pages = int(data.get('claimed_pages', 1))
@@ -61,8 +61,12 @@ def create_order(request):
             'amount': total_price,
             'currency': 'INR'
         })
+    except KeyError as e:
+        print(f"🚨 MISSING FIELD IN JSON: {e}")
+        return JsonResponse({'error': f"Missing field: {e}"}, status=400)
     except Exception as e:
-        return HttpResponseBadRequest(f"Error creating order: {str(e)}")
+        print(f"🚨 CRITICAL ERROR: {e}")
+        return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
 def verify_payment(request):
