@@ -65,6 +65,34 @@ def create_order(request):
         return HttpResponseBadRequest(f"Error creating order: {str(e)}")
 
 @csrf_exempt
+def verify_payment(request):
+    if request.method != "POST":
+        return HttpResponseBadRequest("Invalid Request Method")
+    
+    try:
+        data = json.loads(request.body)
+        razorpay_payment_id = data.get('razorpay_payment_id')
+        razorpay_order_id = data.get('razorpay_order_id')
+        razorpay_signature = data.get('razorpay_signature')
+        
+        if not razorpay_payment_id or not razorpay_order_id or not razorpay_signature:
+            return HttpResponseBadRequest("Missing required fields")
+            
+        generated_signature = hmac.new(
+            settings.RAZORPAY_KEY_SECRET.encode('utf-8'),
+            f"{razorpay_order_id}|{razorpay_payment_id}".encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        if hmac.compare_digest(generated_signature, razorpay_signature):
+            return JsonResponse({'status': 'success', 'message': 'Payment verified successfully'})
+        else:
+            return HttpResponseBadRequest("Signature mismatch")
+            
+    except Exception as e:
+        return HttpResponseBadRequest(f"Error verifying payment: {str(e)}")
+
+@csrf_exempt
 def razorpay_webhook(request):
     print("====== RAZORPAY WEBHOOK RECEIVED ======")
     if request.method != "POST":
